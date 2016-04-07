@@ -24,7 +24,7 @@ def apply_clf_model(df, clf, train=True):
         test = io.loadmat('/home/max/projects/challengeMDI343/data/data_test.mat')
         probes_id = test['probeId'][:,0]
 
-    preds = np.asarray([predLabel[i] for i in probes_id])
+    preds = np.asarray([int(predLabel[i]) for i in probes_id])
     
     return preds
 

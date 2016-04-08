@@ -1,4 +1,7 @@
 import numpy as np
+from joblib import Parallel, delayed
+import multiprocessing
+import itertools
 
 def find_label(ranks, probe_id, eps=1e-2, tol=1e-3, max_rounds=500):
     """
@@ -18,6 +21,7 @@ def find_label(ranks, probe_id, eps=1e-2, tol=1e-3, max_rounds=500):
 
     return {probe_id: max_label}
 
+
 def get_equilibrium(transit, uniques, tol, max_rounds):
     """
     Apply recursively the transition matrix to the vector of prababilities, until convergence.
@@ -32,89 +36,90 @@ def get_equilibrium(transit, uniques, tol, max_rounds):
         label_proba1 = label_proba2
         label_proba2 = transit.dot(label_proba1)
         diff = np.linalg.norm(label_proba2 - label_proba1)
-        #diff = np.abs(np.linalg.norm(label_proba2) - np.linalg.norm(label_proba1))
         i += 1
         
     return label_proba2
 
-def new_rankings(ranks, probe_id, num_estimators, max_features=3, eps=1e-1, tol=1e-5, max_rounds=100, seed=42):
+def random_rankings(ranks, n_estimators, max_features=3, eps_min=1e-2, eps_max=0.8, tol=1e-5, max_rounds=100, seed=42, n_jobs=-1):
     """
     Combining multiple rankings based on markov chains, with different transition matrix
+    
+    INPUTS:
+    
+    ranks        : matrix of ranked items to use as features of the model [n_items, n_ranking_function]
+    n_estimators : number of weak markov chains to compute
+    max_features : maximum number of features that can be randomly chosen (<=n_ranking_function)
+    eps_min      : minimum value of the epsilon added to the transition matrixes
+    eps_max      : maximum value of the epsilon added to the transition matrixes
+    tol          : stop criterion to the computation of the equilibrium states
+    max_rounds   : the maximum number of iteration in the computation of the equilibrium states
+    seed         : initialization of the numpy.random seed
+    n_jobs       : number of processor to use in parallel computing, if None: no parallel
     """
     np.random.seed(seed)
     
-    # finding the possible states of the markov chain
+    # initialisation of the new ranking matrix
+    rankings = np.empty([ranks.shape[1], n_estimators])
+    
+    if n_jobs != None:
+        if n_jobs == -1:
+            n_jobs = multiprocessing.cpu_count()
+
+        # computing n_estimators weak markov chains in parallel, with the function new_ranking()
+        results = Parallel(n_jobs=n_jobs)(delayed(new_ranking)(ranks, max_features, eps_min, eps_max, tol, max_rounds)
+                                           for i in range(n_estimators))
+        # aggregating the results in np.array
+        for i in range(n_estimators):
+            rankings[:,i] = results[i] 
+        
+    else:
+        for i in range(n_estimators):
+            rankings[:,i] = new_ranking(ranks, max_features, eps_min, eps_max, tol, max_rounds)
+        
+    return rankings
+
+
+    
+def new_ranking(ranks, max_features, eps_min, eps_max, tol, max_rounds):
+    """
+    Function used in random_rankings
+    """
     
     index = np.asarray(range(ranks.shape[0]))
     
+    # list of markov models
     builds = [build_transition1, build_transition2, build_transition3, build_transition4, build_transition5, build_transition6,
              build_transition7, build_transition8]
     
-    uniques = []
-    transit = []
-    for i in range(num_estimators):
-        rk = ranks[np.random.choice(index, size=max_features, replace=False),:]
-        uniques.append(np.unique(rk))
-        s = np.random.randint(len(builds))
-        model = builds[s]
-        transit.append(model(rk, eps=np.random.uniform(0.01,0.8)))
+    # choose randomly the number of features to take
+    n_features = np.random.randint(2,max_features+1)
+        
+    # select randomly the n_features to use
+    rk = ranks[np.random.choice(index, size=n_features, replace=False),:]
+    uniques = np.unique(rk)
+        
+    # select randomly the Morkov model in the list 'builds'
+    s = np.random.randint(len(builds))
+    model = builds[s]
+        
+    # build the corresponding transition matrix
+    transit = model(rk, eps=np.random.uniform(eps_min, eps_max))
+        
+    # get the equilibrium state of the markov chain
+    res = get_equilibrium(transit, uniques, tol, max_rounds)
+        
+    # sort individual states according to the equilibrium state
+    ind = np.argsort(-res)
     
-    # build transition matrix
-    """
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques1 = np.unique(rk)
-    transit1 = build_transition1(rk, eps=np.random.uniform(0.3,0.8))
-    
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques2 = np.unique(rk)
-    transit2 = build_transition2(rk, eps=np.random.uniform(0.3,0.8))
-    
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques3 = np.unique(rk)
-    transit3 = build_transition3(rk, eps=np.random.uniform(0.01,0.5))
-    
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques4 = np.unique(rk)
-    transit4 = build_transition4(rk, eps=np.random.uniform(0.01,0.5))
-    
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques5 = np.unique(rk)
-    transit5 = build_transition5(rk, eps=np.random.uniform(0.3,0.8))
-    
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques6 = np.unique(rk)
-    transit6 = build_transition6(rk, eps=np.random.uniform(0.3,0.8))
-    
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques7 = np.unique(rk)
-    transit7 = build_transition7(rk, eps=np.random.uniform(0.01,0.5))
-    
-    rk = ranks[np.random.choice(index, size=num_ranks, replace=False),:]
-    uniques8 = np.unique(rk)
-    transit8 = build_transition8(rk, eps=np.random.uniform(0.01,0.5))
-    """
-    #transit = np.stack((transit1, transit2, transit3, transit4, transit5, transit6, transit7, transit8))
-    #transit = [transit1, transit2, transit3, transit4, transit5, transit6, transit7, transit8]
-    #uniques = [uniques1, uniques2, uniques3, uniques4, uniques5, uniques6, uniques7, uniques8]
-    
-    #print 'big matrix:', transit.shape
-    
-    rankings = np.empty([ranks.shape[1], len(transit)])
-    for i in range(len(transit)):
-        res = get_equilibrium(transit[i], uniques[i], tol, max_rounds)
-        ind = np.argsort(-res)
-        rankings[:,i] = uniques[i][ind][:ranks.shape[1]]
-    
-    return rankings
-    
+    return uniques[ind][:ranks.shape[1]]
+
+
 
 def build_transition1(ranks, eps):
     """
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
-    
-    ranks = ranks.T
-    
+        
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -122,17 +127,15 @@ def build_transition1(ranks, eps):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.#*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.#*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += np.sign(posi-posj)
+    
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.
@@ -169,9 +172,7 @@ def build_transition2(ranks, eps=5e-1):
     """
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
-    
-    ranks = ranks.T
-    
+        
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -179,17 +180,15 @@ def build_transition2(ranks, eps=5e-1):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.#*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.#*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += np.sign(posi-posj)
+            
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.
@@ -223,9 +222,7 @@ def build_transition3(ranks, eps):
     """
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
-    
-    ranks = ranks.T
-    
+        
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -233,17 +230,16 @@ def build_transition3(ranks, eps):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.#*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.#*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += np.sign(posi-posj)
+    
+    
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.
@@ -273,9 +269,7 @@ def build_transition4(ranks, eps):
     """
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
-    
-    ranks = ranks.T
-    
+        
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -283,17 +277,16 @@ def build_transition4(ranks, eps):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.#*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.#*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += np.sign(posi-posj)
+    
+    
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.
@@ -326,9 +319,7 @@ def build_transition5(ranks, eps):
     """
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
-    
-    ranks = ranks.T
-    
+  
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -336,17 +327,16 @@ def build_transition5(ranks, eps):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += posi-posj
+    
+    
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.
@@ -385,8 +375,6 @@ def build_transition6(ranks, eps=5e-1):
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
     
-    ranks = ranks.T
-    
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -394,17 +382,16 @@ def build_transition6(ranks, eps=5e-1):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += posi-posj
+    
+    
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.
@@ -439,8 +426,6 @@ def build_transition7(ranks, eps):
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
     
-    ranks = ranks.T
-    
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -448,17 +433,15 @@ def build_transition7(ranks, eps):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += posi-posj
+    
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.
@@ -489,8 +472,6 @@ def build_transition8(ranks, eps):
     Fonction to build the transition matrix between all possible states of the Markov chain
     """
     
-    ranks = ranks.T
-    
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
 
@@ -498,17 +479,16 @@ def build_transition8(ranks, eps):
     transit = np.zeros((len(uniques), len(uniques)))
 
     # filling the transition matrix with transition probabilities between all possible states
-    for i in range(len(uniques)):
-        for j in range(len(uniques)):
-            for col in range(ranks.shape[1]):
-                rank = ranks[:,col]
-                if i!=j and uniques[i] in rank and uniques[j] in rank:
-                    posi = np.argwhere(rank==uniques[i])[0][0]
-                    posj = np.argwhere(rank==uniques[j])[0][0]
-                    if posi > posj:
-                        transit[j,i] += 1.*(posi-posj)
-                    elif posi < posj:
-                        transit[j,i] -= 1.*(posj-posi)
+    for ij in itertools.combinations(range(len(uniques)), 2):
+        for col in range(ranks.shape[0]):
+            rank = ranks[col,:]
+            if uniques[ij[0]] in rank and uniques[ij[1]] in rank:
+                posi = np.argwhere(rank==uniques[ij[0]])[0][0]
+                posj = np.argwhere(rank==uniques[ij[1]])[0][0]
+                transit[ij[1],ij[0]] += posi-posj
+    
+    
+    transit = transit - transit.T
                         
     # no negative proba
     transit[transit<0.] = 0.

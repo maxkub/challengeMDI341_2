@@ -3,15 +3,21 @@ from joblib import Parallel, delayed
 import multiprocessing
 import itertools
 
-def find_label(ranks, probe_id, eps=1e-2, tol=1e-3, max_rounds=500):
+def find_label(ranks, probe_id, eps=1e-2, tol=1e-3, max_rounds=500, select_model=0):
     """
     Function that return the most probable label based on a Markov chain algorithm
     """
     # finding the possible states of the markov chain
     uniques = np.unique(ranks)
     
+    # list of markov models
+    builds = [build_transition1, build_transition2, build_transition3, build_transition4, build_transition5, build_transition6,
+             build_transition7, build_transition8]
+    
+    model = builds[select_model]
+    
     # build transition matrix
-    transit = build_transition1(ranks, eps)
+    transit = model(ranks, eps)
     
     # get probabilities of each final state of the markov chain
     label_probas = get_equilibrium(transit,uniques, tol, max_rounds)
@@ -99,8 +105,11 @@ def new_ranking(ranks, max_features, eps_min, eps_max, tol, max_rounds):
     uniques = np.unique(rk)
         
     # select randomly the Morkov model in the list 'builds'
-    s = np.random.randint(len(builds))
-    model = builds[s]
+    #s = np.random.randint(len(builds))
+    model = builds[0]
+    
+    #print s, n_features , '|||'
+    
         
     # build the corresponding transition matrix
     transit = model(rk, eps=np.random.uniform(eps_min, eps_max))

@@ -104,5 +104,5 @@ def find_label(probe_id, group):
         
         #uniques, count = np.unique(sim_points_labels, return_counts=True)
         #label = uniques[np.argmax(count)]
+    return {int(probe_id):int(label)}
     
-    return {int(probe_id):label}
